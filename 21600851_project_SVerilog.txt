@@ -1,0 +1,706 @@
+module top(
+   
+	input logic clk, //100Mhz on Basys3
+
+    input logic reset, newGame,
+    input logic dec_l, dec_r, inc_l, inc_r, 
+    
+    // debounced buttons
+    // debounce the game buttons
+    //input logic row1d, row2d, row3d, row4d, turnChangeButtonD,
+    input logic row1, row2, row3, row4, turnChangeButton,
+	// FPGA pins for 8x8 display
+	output logic reset_out, //shift register's reset
+	output logic OE, 	//output enable, active low 
+	output logic SH_CP,  //pulse to the shift register
+	output logic ST_CP,  //pulse to store shift register
+	output logic DS, 	//shift register's serial input data
+	output logic [7:0] col_select, // active column, active high
+	
+    //7-segment signals
+    output logic a, b, c, d, e, f, g, dp,
+    output logic [3:0] an,    
+    
+    //step motor
+    output logic [3:0] phases,
+    
+    // fsm test
+    output logic [3:0] currentState,
+    output logic [3:0] currentStateG
+	);
+	
+// debounce the game buttons
+    //logic row1d, row2d, row3d, row4d, turnChangeButtonD;
+    
+    debounce r1(row1,clk, row1d);
+    debounce r2(row2,clk,row2d);
+    debounce r3(row3,clk,row3d);
+    
+    debounce r4(row4,clk,row4d);
+    debounce tCB(turnChangeButton,clk,turnChangeButtonD);	
+	//logic row1d, row2d, row3d, row4d, turnChangeButtonD;
+	logic [2:0] col_num;
+    logic [7:0] [7:0] image_red, image_green, image_blue;
+// SCORES
+//4 numbers to keep value of any of 4 digits
+//user's hex inputs for 4 digits
+logic [6:0] score_l, score_r;
+logic [3:0] in0 = score_r % 10;
+logic [3:0] in1 = (score_r-(score_r % 10))/10;
+logic [3:0] in2 = score_l % 10;
+logic [3:0] in3 = (score_l-(score_l % 10))/10;
+fsm_score fs(clk, reset, dec_l, dec_r, inc_l, inc_r, score_l, score_r, currentState);
+ 
+//// SCORES TO 7SEG
+SevSeg_4digit SevSeg(
+    clk,
+    in0, in1, in2, in3, //user inputs for each digit (hexadecimal value)
+    a, b, c, d, e, f, g, dp, // just connect them to FPGA pins (individual LEDs).
+    an   // just connect them to FPGA pins (enable vector for 4 digits, active low)
+);
+
+// STEP MOTOR
+logic stop;
+logic [1:0] speed = 2'b10;
+logic direction;
+logic [28:0] counter;
+logic changeTurnFSM;
+always_ff @ (posedge clk)
+    if (turnChangeButtonD || changeTurnFSM) begin // || changeTurn) begin
+        counter = {29{1'b1}};
+        direction = ~direction;
+    end
+    else if (counter == 0)
+        stop = 1;
+    else begin
+        counter--;
+        stop = 0;
+    end   
+
+// RGB    
+
+
+
+// initial value for RGB images:
+//	image_???[0]     : left column  .... image_???[7]     : right column
+//	image_???[?]'MSB : top line     .... image_???[?]'LSB : bottom line
+//logic [0:7] [7:0] initial_red = 
+//{8'b00000000, 8'b00000000, 8'b00111000, 8'b00111000, 8'b00000000, 8'b00000000, 8'b11111110, 8'b11111110};
+//logic [0:7] [7:0]  initial_blue = 
+//{8'b00010000, 8'b00010000, 8'b00000000, 8'b00000000, 8'b01111100, 8'b01111100, 8'b00000000, 8'b00000000};
+
+
+   
+// This module displays 8x8 image on LED display module. 
+display_8x8 display_8x8_0(
+	.clk(clk),
+	
+	// RGB data for display current column
+	.red_vect_in(red[col_num]),
+	.green_vect_in(green[col_num]),
+	.blue_vect_in(blue[col_num]),
+	
+	.col_data_capture(), // unused
+	.col_num(col_num),
+	
+	// FPGA pins for display
+	.reset_out(reset_out),
+	.OE(OE),
+	.SH_CP(SH_CP),
+	.ST_CP(ST_CP),
+	.DS(DS),
+	.col_select(col_select)   
+);
+
+logic rgtl;
+always @* begin
+    if (score_r > score_l)
+        rgtl = 1;
+    else
+        rgtl = 0;    
+end
+
+// game image
+logic [7:0] [7:0] red;
+logic [7:0] [7:0] blue;
+logic [7:0] [7:0] green  = {8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000};
+
+//fsm_game fg(clk, newGame, row1,row2,row3,row4, rgtl, red, blue, currentStateG);
+                             
+fsm_game fg(clk, newGame, row1d, row2d, row3d, row4d, rgtl, changeTurnFSM, red, blue, currentStateG);
+//// TEST DISPLAY MATRIX
+//logic [3:0] in0 = red[4][3:0];
+//logic [3:0] in1 = red[4][7:4];
+//logic [3:0] in2 = red[0][3:0];
+//logic [3:0] in3 = red[0][7:4];
+
+//// TEST DISPLAY GAME WITH 7SEG
+//SevSeg_4digit SevSeg(
+//    clk,
+//    in0, in1, in2, in3, //user inputs for each digit (hexadecimal value)
+//    a, b, c, d, e, f, g, dp, // just connect them to FPGA pins (individual LEDs).
+//    an   // just connect them to FPGA pins (enable vector for 4 digits, active low)
+//);
+ 
+   
+// move the image to right every half a second to make an animation
+//logic [26:0] counter = {27{1'b0}}; 
+//always@ (posedge clk)
+//begin
+//	counter <= counter + 1;
+
+//	if ( counter == 27'd49_999_999 )
+//	begin
+//		counter <= {27{1'b0}}; 
+//		image_red   <= { image_red[7],   image_red[0:6]};
+//		image_green <= { image_green[7], image_green[0:6]};
+//		image_blue  <= { image_blue[7],  image_blue[0:6]};
+//	end
+
+//end
+
+
+//
+
+
+stepmotor stepmotor_inst0(
+	.clk(clk),
+    .direction(direction), //user input for motor direction
+	.speed(speed), // user input for motor speed
+    .phases(phases), // just connect them to FPGA (motor driver)
+	.stop(stop) // user input for stopping the motor
+);
+
+endmodule
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 06.05.2018 18:22:53
+// Design Name: 
+// Module Name: fsm_score
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+module fsm_game(
+    input logic clk, 
+    input logic newGame,
+    input logic row1,
+    input logic row2,
+    input logic row3,
+    input logic row4,
+    
+    // input fsm_game
+    input logic rgtl,
+    
+    // ouput to check turn change
+    output logic changeTurnFSM,
+    
+    output logic [7:0] [7:0] red,
+    output logic [7:0] [7:0] blue,
+    output logic [3:0] currentStateG 
+    );
+  
+    logic [3:0] nextState;
+    //logic [3:0] currentState;
+    
+    parameter S0 = 4'b0000;
+    parameter S1 = 4'b0001;
+    parameter S2 = 4'b0010;
+    parameter S3 = 4'b0011;
+    parameter S4 = 4'b0100;
+    parameter S5 = 4'b0101;
+    parameter S6 = 4'b0110;
+    parameter S7 = 4'b0111;
+    parameter S8 = 4'b1000;
+    parameter S9 = 4'b1001;
+    parameter S10 = 4'b1010;
+    parameter S11 = 4'b1011;
+    parameter S12 = 4'b1100;
+    parameter S13 = 4'b1101;
+
+
+
+    always @(clk)
+        currentStateG <= nextState;
+        
+    always_ff @(posedge clk)
+    begin
+        case ({currentStateG})
+        
+            S0: nextState <= S1;
+                            
+            S1: if ( !((|red) || (|blue)) ) nextState <= S11;  
+            else if (newGame) nextState <= S2;
+            else if (row1) nextState <= S3;
+            else if (row2) nextState <= S5;
+            else if (row3) nextState <= S7;
+            else if (row4) nextState <= S9;
+            else  nextState <= S1;
+           
+            S2: if (!newGame) nextState <= S0;
+            else  nextState <= S2;
+            
+            S3: if (!row1) nextState <= S4;
+            else  nextState <= S3;
+
+            S4: nextState <= S1;
+
+            S5: if (!row2) nextState <= S6;
+            else nextState <= S5;
+            
+            S6: nextState <= S1;
+            
+            S7: if (!row3) nextState <= S8;
+            else  nextState <= S7;
+                        
+                        
+            S8: nextState <= S1;
+                        
+            S9: if (!row4) nextState <= S10;
+            else  nextState <= S9;
+                        
+            S10: nextState <= S1; 
+            
+            S11: if (newGame) nextState <= S2;
+                 else nextState <= S11;
+              
+            //S11: nextState <= S12;
+            
+            S12: nextState <= S13;     
+                                    
+            default: nextState = S1;                               
+        endcase
+    end
+    
+    always_ff @(posedge clk )
+        begin
+            case(currentStateG)
+                S0: begin
+                        red  = {8'b00000011, 8'b00000011, 8'b00110011, 8'b00110011, 8'b00110011, 8'b00000011, 8'b00000011, 8'b00000000};
+                        blue = {8'b00000000, 8'b00001100, 8'b00001100, 8'b11001100, 8'b00001100, 8'b00001100, 8'b00000000, 8'b00000000};
+                    end
+                S1: begin changeTurnFSM = 0; end
+                S2: begin end //changeTurn = 0; end
+                S3: begin end //changeTurn = 0; end
+                S4: begin
+                        if(blue[4] == 8'b11001100) begin blue[4] <= 8'b00001100; changeTurnFSM = 1; end
+                        else if(blue[4] == 8'b11000000) begin blue[4] <= 8'b00000000; changeTurnFSM = 1; end
+                    end
+                S5: begin end
+                S6: begin
+                        if(red[3] == 8'b00110011) red[3] <= 8'b00000011;
+                        else if(red[3] == 8'b00110000) red[3] <= 8'b00000000;         
+                        else if(red[4] == 8'b00110011) red[4] <= 8'b00000011;
+                        else if(red[4] == 8'b00110000) red[4] <= 8'b00000000;         
+                        else if(red[5] == 8'b00110011) begin red[5] <= 8'b00000011; changeTurnFSM = 1; end
+                        else if(red[5] == 8'b00110000) begin red[5] <= 8'b00000000; changeTurnFSM = 1; end
+                    end
+                S7: begin end
+                S8: begin 
+                        if(blue[2] == 8'b00001100) blue[2] <= 8'b00000000;
+                        else if(blue[3] == 8'b00001100) blue[3] <= 8'b00000000;
+                        else if(blue[4] ==8'b11001100) blue[4] <= 8'b11000000;                    
+                        else if(blue[4] == 8'b00001100) blue[4] <= 8'b00000000;
+                        else if(blue[5] == 8'b00001100) blue[5] <= 8'b00000000;                    
+                        else if(blue[6] == 8'b00001100) begin blue[6] <= 8'b00000000; changeTurnFSM = 1; end
+                    end
+                S9: begin end //changeTurn = 0; end 
+                S10: begin 
+                        if(red[1] ==  8'b00000011) red[1] <= 8'b00000000;
+                        else if(red[2] ==  8'b00000011) red[2] <= 8'b00000000;         
+                        else if(red[3] == 8'b00110011) red[3] <= 8'b00110000;
+                        else if(red[3] ==  8'b00000011) red[3] <= 8'b00000000;         
+                        else if(red[4] == 8'b00110011) red[4] <= 8'b00110000;
+                        else if(red[4] ==  8'b00000011) red[4] <= 8'b00000000;   
+                        else if(red[5] == 8'b00110011) red[5] <= 8'b00110000;
+                        else if(red[5] ==  8'b00000011) red[5] <= 8'b00000000;   
+                        else if(red[6] ==  8'b00000011) red[6] <= 8'b00000000;
+                        else if(red[7] ==  8'b00000011) begin red[7] <= 8'b00000000; changeTurnFSM = 1; end                                           
+                     end
+                
+                S11: begin
+                        if (rgtl)
+                            red  = /*{8'b00001000, 
+                                    8'b00001100, 
+                                    8'b11111110, 
+                                    8'b11111111, 
+                                    8'b11111110, 
+                                    8'b00001100, 
+                                    8'b00001000, 
+                                    8'b00000000};*/
+                                    
+                                    {8'b00010000, 
+                                    8'b00111000, 
+                                    8'b01111100, 
+                                    8'b11111110, 
+                                    8'b00111000, 
+                                    8'b00111000, 
+                                    8'b00111000, 
+                                    8'b00111000};     
+                        else
+                            red = { 8'b00111000, 
+                                    8'b00111000, 
+                                    8'b00111000, 
+                                    8'b00111000,
+                                    8'b11111110,
+                                    8'b01111100,
+                                    8'b00111000,
+                                    8'b00010000};
+                            //red  = {8'b00010000, 8'b00110000, 8'b01111111, 8'b11111111, 8'b01111111, 8'b00110000, 8'b00010000, 8'b00000000};
+                        blue = {8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000, 8'b00000000};
+                        
+                     end 
+                     S12: begin changeTurnFSM = 1; end
+                     S13: begin end     
+        endcase
+    end
+endmodule
+//fpga4student.com
+// FPGA projects, Verilog projects, VHDL projects
+// Verilog code for button debouncing on FPGA
+// debouncing module 
+module debounce(input pb_1,clk,output pb_out);
+wire slow_clk;
+wire Q1,Q2,Q2_bar;
+clock_div u1(clk,slow_clk);
+my_dff d1(slow_clk, pb_1,Q1 );
+my_dff d2(slow_clk, Q1,Q2 );
+assign Q2_bar = ~Q2;
+assign pb_out = Q1 & Q2_bar;
+endmodule
+// Slow clock for debouncing 
+module clock_div(input Clk_100M, output reg slow_clk
+
+    );
+    reg [26:0]counter=0;
+    always @(posedge Clk_100M)
+    begin
+        counter <= (counter>=249999)?0:counter+1;
+        slow_clk <= (counter < 125000)?1'b0:1'b1;
+    end
+endmodule
+// D-flip-flop for debouncing module 
+module my_dff(input DFF_CLOCK, D, output reg Q);
+
+    always @ (posedge DFF_CLOCK) begin
+        Q <= D;
+    end
+
+endmodule
+
+#------------------------------------------------------------
+#---------------------- Clock signal ------------------------
+#------------------------------------------------------------
+set_property PACKAGE_PIN W5 [get_ports clk]  	 	 	 	  
+set_property IOSTANDARD LVCMOS33 [get_ports clk] 
+create_clock -add -name sys_clk_pin -period 10.00 -waveform {0 5} [get_ports clk] 
+
+#------------------------------------------------------------
+#--------------------  user inputs for score ----------------
+#------------------------------------------------------------
+set_property PACKAGE_PIN U1 [get_ports reset] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports reset]
+set_property PACKAGE_PIN R2 [get_ports dec_l] 	 	 	 	 	 
+    set_property IOSTANDARD LVCMOS33 [get_ports dec_l]
+set_property PACKAGE_PIN V16 [get_ports dec_r] 	 	 	 	 	 
+    set_property IOSTANDARD LVCMOS33 [get_ports dec_r]
+set_property PACKAGE_PIN T1 [get_ports inc_l]                  	 
+    set_property IOSTANDARD LVCMOS33 [get_ports inc_l] 
+set_property PACKAGE_PIN V17 [get_ports inc_r] 	 	 	 	 	 
+    set_property IOSTANDARD LVCMOS33 [get_ports inc_r] 
+set_property PACKAGE_PIN W16 [get_ports newGame] 	 	 	 	 	 
+    set_property IOSTANDARD LVCMOS33 [get_ports newGame]   
+# BUTTONS    
+set_property PACKAGE_PIN T18 [get_ports row1] 	 	 	 	 	 
+    set_property IOSTANDARD LVCMOS33 [get_ports row1]
+set_property PACKAGE_PIN T17 [get_ports row2]                          
+    set_property IOSTANDARD LVCMOS33 [get_ports row2]
+set_property PACKAGE_PIN U17 [get_ports row3]                       
+    set_property IOSTANDARD LVCMOS33 [get_ports row3] 
+set_property PACKAGE_PIN W19 [get_ports row4]                          
+    set_property IOSTANDARD LVCMOS33 [get_ports row4] 
+set_property PACKAGE_PIN U18 [get_ports turnChangeButton]                          
+    set_property IOSTANDARD LVCMOS33 [get_ports turnChangeButton]     
+
+## SWITCHES FOR GAME INPUTS
+#set_property PACKAGE_PIN T3 [get_ports row1] 	 	 	 	 	 
+#    set_property IOSTANDARD LVCMOS33 [get_ports row1]
+#set_property PACKAGE_PIN V2 [get_ports row2]                          
+#    set_property IOSTANDARD LVCMOS33 [get_ports row2]
+#set_property PACKAGE_PIN W13 [get_ports row3]                       
+#    set_property IOSTANDARD LVCMOS33 [get_ports row3] 
+#set_property PACKAGE_PIN W14 [get_ports row4]                          
+#    set_property IOSTANDARD LVCMOS33 [get_ports row4] 
+#set_property PACKAGE_PIN V15 [get_ports turnChangeButton]                          
+#    set_property IOSTANDARD LVCMOS33 [get_ports turnChangeButton]                       
+                         
+                         
+#------------------------------------------------------------
+#-------------------- 7 segment display ---------------------
+#------------------------------------------------------------
+set_property PACKAGE_PIN W7 [get_ports {a}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {a}] 
+set_property PACKAGE_PIN W6 [get_ports {b}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {b}] 
+set_property PACKAGE_PIN U8 [get_ports {c}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {c}] 
+set_property PACKAGE_PIN V8 [get_ports {d}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {d}] 
+set_property PACKAGE_PIN U5 [get_ports {e}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {e}] 
+set_property PACKAGE_PIN V5 [get_ports {f}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {f}] 
+set_property PACKAGE_PIN U7 [get_ports {g}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {g}] 
+set_property PACKAGE_PIN V7 [get_ports dp]  	 	 	 	  
+ 	set_property IOSTANDARD LVCMOS33 [get_ports dp] 
+	
+set_property PACKAGE_PIN U2 [get_ports {an[0]}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {an[0]}] 
+set_property PACKAGE_PIN U4 [get_ports {an[1]}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {an[1]}] 
+set_property PACKAGE_PIN V4 [get_ports {an[2]}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {an[2]}] 
+set_property PACKAGE_PIN W4 [get_ports {an[3]}] 	 	 	 	 	 
+ 	set_property IOSTANDARD LVCMOS33 [get_ports {an[3]}] 
+
+
+	
+#------------------------------------------------------------
+#---------------------- Stepper motor -----------------------
+#------------------------------------------------------------	
+
+###4 phases
+###step motor: Bb
+#set_property PACKAGE_PIN V19 [get_ports {phases[0]}]	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {phases[0]}] 
+##step motor: Ab
+#set_property PACKAGE_PIN U19 [get_ports {phases[1]}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {phases[1]}] 
+##step motor: B
+#set_property PACKAGE_PIN E19 [get_ports {phases[2]}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {phases[2]}] 
+##step motor: A
+#set_property PACKAGE_PIN U16 [get_ports {phases[3]}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {phases[3]}]
+ 	
+ 	
+#LEDS
+set_property PACKAGE_PIN L1 [get_ports {currentState[3]}] 	 	 	 	 	 
+ 	set_property IOSTANDARD  LVCMOS33 [get_ports {currentState[3]}] 
+set_property PACKAGE_PIN P1 [get_ports {currentState[2]}] 	 	 	 	 	 
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentState[2]}] 
+set_property PACKAGE_PIN N3 [get_ports {currentState[1]}]                          
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentState[1]}]  	  	
+set_property PACKAGE_PIN P3 [get_ports {currentState[0]}]                          
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentState[0]}]
+    
+    
+set_property PACKAGE_PIN U3 [get_ports {currentStateG[3]}] 	 	 	 	 	 
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentStateG[3]}] 
+set_property PACKAGE_PIN W3 [get_ports {currentStateG[2]}]                          
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentStateG[2]}] 
+set_property PACKAGE_PIN V3 [get_ports {currentStateG[1]}]                          
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentStateG[1]}]            
+set_property PACKAGE_PIN V13 [get_ports {currentStateG[0]}]                          
+    set_property IOSTANDARD  LVCMOS33 [get_ports {currentStateG[0]}]      	
+##direction	
+#set_property PACKAGE_PIN R2 [get_ports {direction}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {direction}] 
+
+##speed
+#set_property PACKAGE_PIN U1 [get_ports {speed[0]}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {speed[0]}] 	
+#set_property PACKAGE_PIN T1 [get_ports {speed[1]}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {speed[1]}]
+
+#stop	
+#set_property PACKAGE_PIN W2 [get_ports {stop}] 	 	 	 	 	 
+# 	set_property IOSTANDARD  LVCMOS33 [get_ports {stop}] 
+
+
+#------------------------------------------------------------
+#---------------------- Display Connector--------------------
+#------------------------------------------------------------
+set_property PACKAGE_PIN L17 [get_ports reset_out]
+set_property IOSTANDARD LVCMOS33 [get_ports reset_out]
+
+set_property PACKAGE_PIN M18 [get_ports OE]
+set_property IOSTANDARD LVCMOS33 [get_ports OE]
+
+set_property PACKAGE_PIN P18 [get_ports SH_CP]
+set_property IOSTANDARD LVCMOS33 [get_ports SH_CP]
+
+set_property PACKAGE_PIN N17 [get_ports ST_CP]
+set_property IOSTANDARD LVCMOS33 [get_ports ST_CP]
+
+set_property PACKAGE_PIN K17 [get_ports DS]
+set_property IOSTANDARD LVCMOS33 [get_ports DS]
+
+set_property PACKAGE_PIN A14 [get_ports {col_select[0]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[0]}]
+
+set_property PACKAGE_PIN A16 [get_ports {col_select[1]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[1]}]
+
+set_property PACKAGE_PIN B15 [get_ports {col_select[2]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[2]}]
+
+set_property PACKAGE_PIN B16 [get_ports {col_select[3]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[3]}]
+
+set_property PACKAGE_PIN A15 [get_ports {col_select[4]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[4]}]
+
+set_property PACKAGE_PIN A17 [get_ports {col_select[5]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[5]}]
+
+set_property PACKAGE_PIN C15 [get_ports {col_select[6]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[6]}]
+
+set_property PACKAGE_PIN C16 [get_ports {col_select[7]}]
+set_property IOSTANDARD LVCMOS33 [get_ports {col_select[7]}]
+
+#------------------------------------------------------------
+#---------------- Ports for step motor ----------------------
+#------------------------------------------------------------
+set_property PACKAGE_PIN J1 [get_ports {phases[0]}]					
+   set_property IOSTANDARD LVCMOS33 [get_ports {phases[0]}]
+set_property PACKAGE_PIN J2 [get_ports {phases[1]}]                    
+    set_property IOSTANDARD LVCMOS33 [get_ports {phases[1]}]
+set_property PACKAGE_PIN G2 [get_ports {phases[2]}]                    
+    set_property IOSTANDARD LVCMOS33 [get_ports {phases[2]}]
+set_property PACKAGE_PIN L2 [get_ports {phases[3]}]                    
+    set_property IOSTANDARD LVCMOS33 [get_ports {phases[3]}] 
+
+
+
+
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 06.05.2018 18:22:53
+// Design Name: 
+// Module Name: fsm_score
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+module fsm_score(
+    input logic clk, 
+    input logic reset,
+    input logic dec_l,
+    input logic dec_r,
+    input logic inc_l,
+    input logic inc_r,
+    output logic [6:0] score_l, 
+    output logic [6:0] score_r,
+    output logic [3:0] currentState 
+    );
+  
+    logic [3:0] nextState;
+   // logic [3:0] currentState;
+   
+    
+    parameter S0 = 4'b0000;
+    parameter S1 = 4'b0001;
+    parameter S2 = 4'b0010;
+    parameter S3 = 4'b0011;
+    parameter S4 = 4'b0100;
+    parameter S5 = 4'b0101;
+    parameter S6 = 4'b0110;
+    parameter S7 = 4'b0111;
+    parameter S8 = 4'b1000;
+    parameter S9 = 4'b1001;
+    parameter S10 = 4'b1010;
+    
+    
+
+    always @(clk)
+        currentState <= nextState;
+        
+    always_ff @(posedge clk)
+    begin
+        case ({currentState})
+        
+            S0: nextState <= S1;
+                            
+            S1: if (reset) nextState <= S2;
+            else if (dec_l) nextState <= S3;
+            else if (dec_r) nextState <= S5;
+            else if (inc_l) nextState <= S7;
+            else if (inc_r) nextState <= S9;
+            else  nextState <= S1;
+            
+            S2: if (!reset) nextState <= S0;
+            else  nextState <= S2;
+            
+            S3: if (!dec_l) nextState <= S4;
+            else  nextState <= S3;
+
+            S4: nextState <= S1;
+
+            S5: if (!dec_r) nextState <= S6;
+            else nextState <= S5;
+            
+            S6: nextState <= S1;
+            
+            S7: if (!inc_l) nextState <= S8;
+            else  nextState <= S7;
+                        
+                        
+            S8: nextState <= S1;
+                        
+            S9: if (!inc_r) nextState <= S10;
+            else  nextState <= S9;
+                        
+            S10: nextState <= S1;
+                                    
+            default: nextState = S0;                               
+        endcase;
+    end
+    
+    always_ff @(posedge clk )
+    begin
+        case(currentState)
+            S0: begin score_l = 0; score_r = 0; end
+            S1: begin end
+            S2: begin end
+            S3: begin end
+            S4: begin if (score_l == 0) score_l = 99;
+                      else score_l--; end
+            S5: begin end
+            S6: begin if (score_r == 0) score_r = 99;
+                      else score_r--; end
+            S7: begin end
+            S8: begin if (score_l == 99) score_l = 0;
+                      else score_l++; end 
+            S9: begin end
+            S10: begin if (score_r == 99) score_r = 0;
+                      else score_r++; end 
+                           
+        endcase
+    end
+endmodule
+
